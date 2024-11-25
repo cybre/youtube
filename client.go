@@ -29,7 +29,7 @@ var (
 )
 
 // DefaultClient type to use. No reason to change but you could if you wanted to.
-var DefaultClient = AndroidClient
+var DefaultClient = IOSClient
 
 // Client offers methods to download video metadata and video streams.
 type Client struct {
@@ -126,11 +126,16 @@ func (c *Client) videoFromID(ctx context.Context, id string) (*Video, error) {
 	return &v, err
 }
 
+type thirdParty struct {
+	EmbedUrl string `json:"embedUrl,omitempty"`
+}
+
 type innertubeRequest struct {
 	VideoID         string            `json:"videoId,omitempty"`
 	BrowseID        string            `json:"browseId,omitempty"`
 	Continuation    string            `json:"continuation,omitempty"`
 	Context         inntertubeContext `json:"context"`
+	ThirdParty      *thirdParty       `json:"thirdParty,omitempty"`
 	PlaybackContext *playbackContext  `json:"playbackContext,omitempty"`
 	ContentCheckOK  bool              `json:"contentCheckOk,omitempty"`
 	RacyCheckOk     bool              `json:"racyCheckOk,omitempty"`
@@ -159,6 +164,7 @@ type innertubeClient struct {
 	UserAgent         string `json:"userAgent,omitempty"`
 	TimeZone          string `json:"timeZone"`
 	UTCOffset         int    `json:"utcOffsetMinutes"`
+	ClientScreen      string `json:"clientScreen,omitempty"`
 }
 
 // client info for the innertube API
@@ -168,6 +174,8 @@ type clientInfo struct {
 	version        string
 	userAgent      string
 	androidVersion int
+	screen         string
+	playerParams   string
 }
 
 var (
@@ -195,20 +203,30 @@ var (
 		key:       "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8", // seems like same key works for both clients
 		userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 	}
+
+	IOSClient = clientInfo{
+		name:      "IOS",
+		version:   "17.33.2",
+		key:       "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
+		userAgent: "com.google.ios.youtube/17.33.2 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)",
+	}
 )
 
 func (c *Client) videoDataByInnertube(ctx context.Context, id string) ([]byte, error) {
 	data := innertubeRequest{
 		VideoID:        id,
 		Context:        prepareInnertubeContext(*c.client),
-		ContentCheckOK: true,
-		RacyCheckOk:    true,
+		ContentCheckOK: false,
+		RacyCheckOk:    false,
 		Params:         playerParams,
 		PlaybackContext: &playbackContext{
 			ContentPlaybackContext: contentPlaybackContext{
-				// SignatureTimestamp: sts,
+				//SignatureTimestamp: 19250,
 				HTML5Preference: "HTML5_PREF_WANTS",
 			},
+		},
+		ThirdParty: &thirdParty{
+			EmbedUrl: "https://www.youtube.com/",
 		},
 	}
 
@@ -234,6 +252,7 @@ func prepareInnertubeContext(clientInfo clientInfo) inntertubeContext {
 			ClientVersion:     clientInfo.version,
 			AndroidSDKVersion: clientInfo.androidVersion,
 			UserAgent:         clientInfo.userAgent,
+			ClientScreen:      clientInfo.screen,
 		},
 	}
 }
@@ -556,7 +575,13 @@ func (c *Client) httpPost(ctx context.Context, url string, body interface{}) (*h
 	req.Header.Set("X-Youtube-Client-Name", "3")
 	req.Header.Set("X-Youtube-Client-Version", c.client.version)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "de,de-DE;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6")
+	req.Header.Set("Accept-Encoding", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Referer", "https://youtube.com/")
+	req.Header.Set("Origin", "https://youtube.com")
+	req.Header.Set("Host", "https://youtube.com")
+	req.Header.Set("User-Agent", c.client.userAgent)
 
 	resp, err := c.httpDo(req)
 	if err != nil {
@@ -584,7 +609,7 @@ func (c *Client) httpPostBodyBytes(ctx context.Context, url string, body interfa
 
 // downloadChunk writes the response data into the data channel of the chunk.
 // Downloading in multiple chunks is much faster:
-// https://github.com/kkdai/youtube/pull/190
+// https://github.com/cybre/youtube/pull/190
 func (c *Client) downloadChunk(req *http.Request, chunk *chunk) error {
 	q := req.URL.Query()
 	q.Set("range", fmt.Sprintf("%d-%d", chunk.start, chunk.end))
